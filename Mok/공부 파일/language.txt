@@ -1,0 +1,374 @@
+
+visual stoudio ConsoleApp C#
+파일제외는 sln파일의 XML로 이루어져 있기때문에
+제외파일은 <itemGroup>내부의 <Compile Remove = "파일이름"/> 으로 제외하고 
+지우면 다시 솔루션 탐색기에 생긴다
+
+
+
+ 맨 처음 서버를 실행시키면, 100메가 정도 사용하던 메모리가 좀 오래 되면, 1기가 넘게 쌓여있다.
+ 대충 계속 살펴보면 1~2기가 사이를 왔다갔다한다.
+
+SocketAsyncEventArgs 메모리 릭에 관련해 검색 해보니, SocketAsyncEventArgs객체를 풀링해서 사용해야 
+한다고 돼 있고, 또한, 사용 후 Dispose()함수를 호출 해, 리소스를 날려줘야 가비지 컬렉션이 수거 해 간다고
+ 한다. 정리 해보면 
+
+SocketAsyncEventArgs 사용 후, Completed에 [-=]으로 콜백함수 제거
+SetBuffer(null, 0,0)으로 버퍼사용 해제
+SocketAsyncEventArgs 객체 소멸 시, Dispose()함수 호출 
+
+위 세가지는 반드시 해줘야 하는 일이다. 하지만 이렇게 하더라도, 메모리 사용량이 메우 크다
+(쌓이고 쌓이다, 다시 줄어들긴하는데, 또 다시 커짐). GC가 돌아도 바로 수거해 가지 않는 느낌
+ 해당 서버를 같은 물리서버에서 여러개 띄울 경우(포트만 다르게 해서 채널링 하는 경우) , 더 많이 쌓인다.
+출처: https://shakddoo.tistory.com/entry/c-SocketAsyncEventArgs-메모리-릭-현상?category=362471 [겨울팥죽 여름빙수]
+
+
+
+
+thread
+{
+ 비동기 프로그래밍 할때 쓰임 
+        thread = new Thread(new ThreadStart(thd));
+
+	void thd()
+    {
+        while (true)
+        {
+            
+                Debug.Log("스레드 실행중");
+            Thread.Sleep(100);
+    }
+	//슬립을 걸어주지 않으면 과부하가 걸릴수도 있다.
+	//끝낼때 
+		thread.join(); // 스레드가 끝나고 종료함
+		thread.Abort(); // 강제 종료 // 참조하여 연산중일때 사용하면 프로그램이 뻑날수도 있다.
+		
+	//      thread.Suspend 와 thread.Resume;
+		ㄴ 일시중지      ㄴ재실행
+}
+UI.thread workthread
+{
+		main Thread == (UI Thraed) / Worker Thread 라는 계념이 따로 존재한다.
+		기본적으로 작업되는 스레드		특정한 목적을 위해 따로 생성해서 동작하는 스레드
+	
+	메인 스레드에서 긴작업을 시작하면 작업을 다 처리한뒤 다음작업을 시작한다
+	그동안 어플리케이션화면은 응답하지 않는 상태가 될것이다.
+	5초간 응답이 없으면 화면에 '응답없음' 파업창이 뜨게된다.
+	이러하기 때문에 긴작업일 경우 worker thread가 일할때 main thread 는 화면을 유지할수있다.
+
+	네트워크 작업
+	 ㄴ 네티워크 작업은 API11부터는 네트워크와 통신하는 작업은 메인스레드에서 작업이 불가능하도록 되어있다.
+
+	UI thread 의 ui작업을 worker thread에서 작업하면
+	 ㄴ worker thread는 여러개일수 있다. main thread와 worker thread가 동시에 ui작업을 수행하고있을때
+	 ㄴ두스레드가 같은 ui자원에 접근하여 서로 다른 수정을 요구한다면 수행해야할 작업이 모호해진다.
+
+	worker thread에서 ui작업을 시도하려고 하면 안드로이드 에서 에러를 발생시키기 때문에 worker thread에서 ui작업하기는 쉽지않다.
+
+	worker thread 에서 ui를 수정하고 싶다면
+	 ㄴ 많은 이미지를 받아오면서 하나씩 화면에 표시하는 작업
+	 ㄴ 이미지를 받아오는것은 네트워크 작업에 해당한다. 때문에 main thread 에서 수행할수가 없다.
+	 ㄴ 하지만 worker thread 에서 작업을 하게되면 직접적으로 ui를 수정할수 없다.
+	 ㄴ 이러한 경우 handler를 사용할수 있다.
+		ㄴ Handler는 핸들러가 생성된 스레드 에서의 작업을 순차적으로 처리해준다.
+		순서
+		1) Main Thread 에서 handler 객체 생성해준다.
+		2) Worker Thread 에서 필요한 위치에서 위의 Handler 객체를 꺼내온다.
+		3) Handler의 post나 sendMessage 메소드 등으로 UI변경을 요청할수 있다.	
+
+		같은값을 사용하기 위해 rook을 걸수도 있다.
+			ㄴ
+
+UI를 변경 해달라고 메인 쓰레드에게 요청하는 것이다. 구체적인 방법으로는,
+ Queue를 하나 만들고 이것을 메인쓰레드와 이외의 쓰레드가 함께 공유하는 것이다.
+첫번째, 소켓 라이브러리는 서버로 부터 받은 데이타를 이 Queue에 push 한다. (받을 때마다 push하여 쌓아둠)(lock 과 Synchronized가 필요하다) 데이터 공유 문제
+두번째, 유니티의 메인 쓰레드가 이 Queue의 크기를 주지적으로 체크하여 데이타가 있으면 그 데이타를 pop하여 UI를 변경하는 등의 행위를 한다. 
+이렇게 간단하게 서로 데이타를 직접적으로 주고받지 않고 Queue를 사용하는 것이다. 
+유니티에서 Queue를 주기적으로 탐색하기 위해서는 Update()에서 Queue를 체그하거나 이것이 부담스럽다면 코루틴을 사용해도 좋다. Update()나 코루틴은 유니티 메인쓰레드에서 관리하기 때문에 데이타 접근시 에러가 발생하지 않는다.
+출처: https://teddy.tistory.com/13 [Teddy Games]
+
+https://itmining.tistory.com/5
+
+
+thread.IsBackground = true setting
+{
+스레드 BackGround 세팅을 true로 세팅시 메인(ui)스레드 종료시 같이 종료실행
+베이스(false)세팅은 종료후에도 계속 실행됨
+}
+
+Handler,Looper 을 이용한 빽그라운드 처리
+{
+ https://jungwoon.github.io/android/2019/09/25/Handler-Looper.html
+ㄴ
+핸들러에 있는 sendMessage()를 통해서 Message(=작업)를 전달합니다.
+그럼 핸들러는 Message Queue에 차례대로 넣습니다.
+그럼 Looper가 Message Queue로부터 하나씩 Message를 뽑아서 핸들러로 전달합니다.
+Looper로부터 전달받은 메시지는 handleMessage()를 통해서 작업을 하게 됩니다.
+
+Looper는 스레드에서 무한히 돌며 자신이 속한 스레드의 messageQueue에 message나 runalbe이 들어오면 FIFO 로 handler에 전달합니다.
+mainthread의 경우 자동으로 looper 가 생성되지만, 새로 생성한 rhread의 경우 looper가 없고 run만 존재한다.
+
+Looper.prepare();를 통하여 Looper를 생성하고 Looper.loop()를 통하여 무한히 돌면서 message,runnable을 handler에 전달해야한다.
+
+
+}
+
+
+싱글톤 패턴
+
+
+async /await 
+{
+	이 작업이 비동기로 샐행된다. 비동기로 실행될때 다른작업을 잠깐 멈춰둘수 있다.
+	비동기로 사용하지만 보통 한번사용할때 사용한다. thread 는 계속 돌릴때
+
+	예제
+async static private void MyMethodAsync(int count)
+    {
+        Debug.Log("C");
+        Debug.Log("D");
+        //여기서 다른 스레드? 로 넘어감
+        await Task.Run(async () => //함수는 이전 함수가 끝난뒤 넘어가는거 같음
+        {
+            for (int i = 1; i <= count; i++)
+            {
+                Debug.Log($"{i}/{count} ...");
+                await Task.Delay(10000); // Thread.Sleep()의 비동기 버전
+            }
+        });
+        // await 함수 끝나면 실행
+        Debug.Log("G");
+        Debug.Log("H");
+    }
+
+    static void Caller()
+    {
+        Debug.Log("A");
+        Debug.Log("B");
+
+        MyMethodAsync(12); //함수실행
+
+        Debug.Log("E");
+        Debug.Log("F");
+    }
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        Caller();
+    }
+
+
+	출력형식
+
+	ABCDEF 1/12.... 12/12 GH 
+	ㄴ AB 후 함수실행 CD 실행후 await로 비동기 실행
+		ㄴ 탈출후 EF 실행 후 비동기 실행~ 
+			비동기 실행이 끝난후 함수 나버지부분 GH실행
+} 
+
+
+mluti thread Looking
+{
+	여러스레드가 하나의 변수에 참조했을때 서로 다른값을 넣거나 받을수 있기때문에
+	look을 걸어 하나의 스레드에서만 이용할수 있도록한다.
+}
+ManualResetEvent thrad
+{
+
+}
+
+Mutex (뮤텍스) Semaphore (세마포어) Monitor (모니터)
+{
+https://about-myeong.tistory.com/34
+
+모니터와 세마포어의 차이는 개념적으로 전자(뮤텍스,모니터)는 상호배제를 함으로써 임계구역에 하나의 스레드만
+ 들어갈 수 있다는 것이고 후자(세마포어)는 하나의 스레드만 들어가게도 할 수 있고 (binary semaphore) 여러개의 스레드가 들어가게 할 수도 있다(counting semaphore).
+
+https://www.crocus.co.kr/563
+뮤텍스 대기큐에 넣고 선입선출 형식으로 접근하는 방식
+https://dev-dream-world.tistory.com/122
+https://frontjang.info/entry/%EC%9E%84%EA%B3%84%EA%B5%AC%EC%97%AD-%EB%AC%B8%EC%A0%9C-%EC%84%B8%EB%A7%88%ED%8F%AC%EC%96%B4-%EB%AE%A4%ED%85%8D%EC%8A%A4%EC%97%90-%EB%8C%80%ED%95%98%EC%97%AC
+	임계구역
+	n개의프로세스가 동작하고 있는 시스템을 생각해봅시다, 각각의 프로세스는
+	임계구역 (Critical Section) 이라 불리는 코드 영역을 가지고 있습니다.
+	 이 임계구역에서 각 프로세스가 공용적으로 사용하는 변수
+	전역변수)를 변경할수 있는 코드를 담고 있습니다.
+	만약 어떤 프로세스가 입계구역 내의 코드를 실행중일떄 다른 프로세스들이
+	임계구역 내의 코드를 실행시킬수 없게 한다는것이 이 개념의 목적입니다
+
+	임계구역 문제(critical section prblem)을 해결하기위해 프로세스간의 상호운용을
+	위해 일정한 프로토콜(규약)을 구상해야 했습니다. 각각의 프로세스는 임계구역에 접근하기
+	위하여 진입을 요청해야하며 이러한 진입요청을 하는 코드 집합을 니입구역 이라합니다
+
+	(내 생각) 그러면 코드가 함수 모양이나 클래스 모양으로써 모든 함수나 클래스를 변경하기위해
+		임이의 큐와 key값을 만들고 큐 스텍에 맞춰
+		안쓰고있을때 큐스텍에서 하나를 불러와 실행; 실행도중 다른큐 스텍은 멈춤
+		
+	우선 이들은 스레드에서 동시참조를 막기위해 만들어진것들인것 같다
+	 lock을 사용하여 만들어지는 계념들이다.
+	
+	뮤텍스는 상태가 두개 0,1(bool) 로 이루어져 참조중일때는 다른스레드가 참조하지 못하게 막는다.
+
+	
+	mytex는 locking과 unlocking을 통해 조율한다.
+	특정 x,y 좌표에 점을 찍는 프로그램을 만들때 A스레드가 좌표를변경하고
+	b스레드는 변경된 자표값대로 화면에 점을찍는다면, 두스레드간에 동기화가 되어야 할수있다.
+	그래서 a가 변경시에 어떤스레드도 참조.변경 하지못하게 Lock하고
+	그 작업이 끝나면 잠금을 풀어주어 B가 자표압ㄱ을 읽어와서 화면에 점을 찍을수 있도록 하는것이
+	정석이다. Mutex가 설정되어 있는경우 다른스레드는 mutex가 해제될때까지 기다려야한다.
+	
+	구현해보자 구현완료 
+		ㄴ 느낀점
+	사용전 for문의 순서가 뒤죽박죽이라 0 2 3 4 5 6 9 10 10 이런식이였지만
+		 ㄴ 사용한뒤 생각대로 출력되었다.
+
+	음 약간 열쇠를 들고 있다 라는게 이해가 안됬는데 mutex 를 선언하고 m waitone 이라는 함수로
+	임계구역 을설정하고 Mutex 내부클래스에 bool값이 있는 느낌이였다.
+	ㄴ 같은값 참조 때문에 썼던것인데 mutex내부의 값은 어떻게 서로 공유하는걸까
+		ㄴ 참조하거나 쓰는것 둘다 문제라고 알고있는데
+		ㄴ두개의 스레드에서 동시에 m.waitone을 사용하면 어떤식으로 처리하는걸까 -locking 을 사용해서 만든건가?
+	ㄴ for문으로 10까지 더하고
+		 ㄴ다른 스레드에서 계속 읽는 걸 만들었다.
+		ㄴ병목현상때문에 사용할만한 예제가 많은지는 잘모르겠다 - 큰프로젝트가 아니여서 상관없는 수준 - 큰프로젝트에서는 따로 병목현상을 해결하는 방법이 있음
+		ㄴ하나정도 메인스레드에서 사용할때 확인하고 잠깐 사용하지않는 용도 정도로 쓸듯
+	
+
+	< mutex	  == 프로그램의 동시실행을 막는용도로 사용하는경우가있다==  mutex >
+			ㄴ어떤 방법일까 두개가 실행되면 생기는 주소값과 
+	
+	==세마포어==
+ 	세마포어 mutex와 비슷 한 방법이지만 방이 여러개 존재하는듯한 방법
+	ㄴ 방이 여러개 존재하고 key도 여러개 존재하여 key 가 있을때 들어가는 듯함
+
+	mutex의 큐 형식인가?
+	
+
+세마포어는 동시에 리소스에 접근할 수 있는 '허용 가능한 Counter의 갯수'를 가지고 있는
+ Counter로 보면 된다. 예를 들면 107호 병실에 방문객용 의자가 5개 있다고 치자. 간호사는
+ 이 병실에 방문자가 5명만 들어갈 수 있도록 허용하고 나머지 방문객들은 밖에서 대기하도록 한다.
+ Counter 갯수만큼 공유자원(병실)에 접근할 수 있다. 이 세마포어 Counter의 갯수에 따라 1개의 경우
+ Binary Semaphore, 2개 이상의 경우 Counting Semaphore라고 불린다. Binary Semaphore의 경우 
+개념적으로 Mutex와 같다고 볼 수 있다.
+
+출처: https://about-myeong.tistory.com/34 [명찌의 포스트잇]
+
+	기다리는 순서가 있다 정도만 다른가? mutex와 세마포어의 차이가
+	세마포어 에서 5개의 자리가 있다고 5명을 넣어줘도 5명이 같은 공유자원을 사용할텐데
+	근본적으로 문제가 생기지아니한가?
+	ㄴ선입선출 대기큐?
+	 
+}
+
+스레드를 함수 포인터로 만들수있나?
+	함수포인터로 제작후 큐에서 처리해야하는 함수를받고  처리하면 어떨까
+	
+iocp
+
+
+
+
+제네릭 c++ 계념 / c# 은 Template 계념
+
+
+c+ 함수 포인터 / c# 델리게이트
+
+c# 사용법
+public delegate void Del(매계변수);
+private Del del = null;
+del  += func(); 
+처럼 사용한다
+ 큐 같이 사용하게 되면
+(함수를 큐에 넣고 선입 선출로 빼서 실행하는 모습)
+    private Queue<DelEvent> delQueue = null;
+    private DelEvent delEvent = null;
+    public void UpdateQueue()
+    {
+        delEvent = delQueue.Dequeue();
+        delEvent();
+    }
+    public void SetFuncs(DelEvent del)
+    {
+        delQueue.Enqueue(del);
+
+    }
+    public bool checkQueueStack()
+    {
+        if (delQueue.Count == 0)
+            return false;
+
+        return true;
+    }
+
+    public void Begin()
+    {
+        delQueue = new Queue<DelEvent>();
+    }
+처럼 사용가능 
+
+
+call by value / Refurnce
+
+public class CallbyRF_VL_Test : MonoBehaviour
+{
+    // Start is called before the first frame update
+    int c; //필드 변수 (전역변수,멤버변수) class 내부에서 사용가능 또는 public 이면 다른class 에서도 class가 있을경우 사용가능
+    void Start()
+    {
+        int a = 10; //지역변수 지역에서만 사용가능
+
+        valFunc(a); //call by value  20
+        Debug.Log(a);              //   10
+
+        c = new int();
+        c = 10;
+        RefFunc(ref c);//cal by refurence //20
+        fildfunc();                       //21
+        Debug.Log(c);
+
+        List<int> K = new List<int>(); 
+        K.Add(10);Debug.Log(K[0]);              //10
+        ListFunc( K); //List by Refurence         20
+        Debug.Log(K[0]);                        //20 list는 기본적으로 ref
+
+    }
+
+    void valFunc(int _a)
+    {
+        _a = 20;
+        Debug.Log(_a);
+
+    }
+    void RefFunc(ref int _a)
+    {
+        _a = 20;
+        Debug.Log(_a);
+    }
+    void fildfunc()
+    {
+        c++; //필드(전역) 변수라서 클래스 내부의 함수에서 수정가능 
+    }
+    void ListFunc( List<int> _a)
+    {
+        _a[0] = 20;
+        Debug.Log(_a[0]);
+
+    }
+}
+// 잘못알고 있었던것
+// 클래스내의 함수에서 사용하면 클레스 에서 선언한 값을 사용해서 딱히 문제가 없었던것...
+// 기본적으로 지역변수를 사용할 이유가없었기 때문에 그런거였다..
+// 그러면 다른 함수에서 사용할때역시 클래스의 함수에서 사용하는값이였기 때문에 그런것.
+// 클래스 내부에선 필드값 클래스전역 임
+// 왜 나는 지역 변수 를사용한적이 별로없는가?
+// 내가프로그래밍하는 방식 클래스 전역 선언들~ 후 함수에서 변경 -> 다른함수에서 참조받은뒤->함수사용이나 전역사용후 움직임
+// 지역변수 사용 for문 i 
+// 지역변수를 사용하지 않았던것.. 그러면 지역변수로 충분했던걸 전역으로 사용하면 class 사용할때 선언시 크기가 커짐. ->부담
+//  전역으로 선언한뒤 전역 = 지역 으로 받아서 사용했음 -> 마치 전부 static 걸어버리는 것과 비슷한느낌
+// 지역변수로 사용할만했던것들 ->다른 장소에서 지속적으로 필요하지 않는값 -> for 문의 i와 같은일을 하는값들
+// c++에서 포인터로 addreas 로 만들어서 사용한것들은 왜지? 에네는 다른클래스를 만들어도 다른클레스에서 사용하려면 include가 필요했었나?
+// 그래서 서로 참조하려면 main에서 다른값을 넣어주는 함수로 다른클레스에서 함수를 사용하고 넣어주면 되는거였나..
+
+
+//초기화 examexam 관련문서 읽어보기 초기화 괄련문제임 , Ation obect 공부가 더필요함
+
